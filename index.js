@@ -128,6 +128,7 @@ async function run() {
         });
 
 
+
         // Send Money functionality
         app.post('/send-money', verifyToken, async (req, res) => {
             const { senderId, receiverId, amount, pin } = req.body;
@@ -173,7 +174,6 @@ async function run() {
                 res.status(500).send({ error: 'Server error' });
             }
         });
-
 
 
 
