@@ -87,7 +87,7 @@ async function run() {
 
         // Registration User
         app.post('/register', async (req, res) => {
-            const { name, pin, mobile, email } = req.body;
+            const { name, pin, mobile, email, role } = req.body;
 
             const existingUser = await userCollection.findOne({ email });
             if (existingUser) {
@@ -95,34 +95,83 @@ async function run() {
             }
 
             const hashedPin = await bcrypt.hash(pin, 10);
-            const newUser = { name, pin: hashedPin, mobile, email, status: 'pending', balance: 0 };
+            const newUser = { name, pin: hashedPin, mobile, email, role, status: 'pending', balance: 0 };
             const result = await userCollection.insertOne(newUser);
             res.send(result);
         });
 
 
-        // User Login 
         app.post('/login', async (req, res) => {
-            const { email, pin } = req.body;
-            const user = await userCollection.findOne({ email });
-
-            if (!user) {
-                return res.status(400).send({ message: 'Invalid credentials' });
+            const { identifier, pin } = req.body;
+            try {
+                const user = await userCollection.findOne({ $or: [{ email: identifier }, { mobile: identifier }] });
+                if (!user) {
+                    return res.status(400).send({ error: 'Invalid email or phone number' });
+                }
+                const isMatch = await bcrypt.compare(pin, user.pin);
+                if (!isMatch) {
+                    return res.status(400).send({ error: 'Invalid PIN' });
+                }
+                const token = jwt.sign({ userId: user._id }, 'your_jwt_secret', { expiresIn: '1h' });
+                res.send({ token });
+            } catch (error) {
+                console.error('Server Error:', error);  // Log the actual error
+                res.status(500).send({ error: 'Server error' });
             }
-
-            const isPinValid = await bcrypt.compare(pin, user.pin);
-            if (!isPinValid) {
-                return res.status(400).send({ message: 'Invalid credentials' });
-            }
-
-            const token = jwt.sign({ email: user.email }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
-            res.send({ token });
         });
+
 
 
         // User Logout
         app.post('/logout', (req, res) => {
             res.send({ message: 'Logged out successfully' });
+        });
+
+
+        // Send Money functionality
+        app.post('/send-money', verifyToken, async (req, res) => {
+            const { senderId, receiverId, amount, pin } = req.body;
+
+            if (amount < 50) {
+                return res.status(400).send({ error: 'Minimum transaction amount is 50 Taka' });
+            }
+
+            const fee = amount > 100 ? 5 : 0;
+            const totalDeducted = amount + fee;
+
+            try {
+                const sender = await userCollection.findOne({ _id: new ObjectId(senderId) });
+                const receiver = await userCollection.findOne({ _id: new ObjectId(receiverId) });
+
+                if (!sender || !receiver) {
+                    return res.status(404).send({ error: 'Sender or receiver not found' });
+                }
+
+                const isMatch = await bcrypt.compare(pin, sender.pin);
+                if (!isMatch) {
+                    return res.status(400).send({ error: 'Invalid PIN' });
+                }
+
+                if (sender.balance < totalDeducted) {
+                    return res.status(400).send({ error: 'Insufficient balance' });
+                }
+
+                // Perform the transaction
+                await userCollection.updateOne(
+                    { _id: new ObjectId(senderId) },
+                    { $inc: { balance: -totalDeducted } }
+                );
+
+                await userCollection.updateOne(
+                    { _id: new ObjectId(receiverId) },
+                    { $inc: { balance: amount } }
+                );
+
+                res.send({ message: 'Transaction successful', fee });
+            } catch (error) {
+                console.error('Server Error:', error);
+                res.status(500).send({ error: 'Server error' });
+            }
         });
 
 
